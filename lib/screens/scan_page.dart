@@ -1,4 +1,4 @@
-import 'dart:io' show File; // used only on mobile / desktop
+import 'dart:io' show File;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
@@ -9,10 +9,6 @@ import '../providers/auth_providers.dart';
 import '../screens/scan_result.dart';
 import '../services/api_service.dart';
 
-/// ─────────────────────────────────────────────────────────────────────────
-/// A helper widget that shows an XFile image on every platform.
-/// On web we render it with Image.network(blob‑url),
-/// elsewhere with Image.file().
 class XFileImage extends StatelessWidget {
   final XFile xFile;
   final BoxFit fit;
@@ -26,9 +22,6 @@ class XFileImage extends StatelessWidget {
   }
 }
 
-/// ─────────────────────────────────────────────────────────────────────────
-///                            ScanPage
-/// ─────────────────────────────────────────────────────────────────────────
 class ScanPage extends StatefulWidget {
   const ScanPage({super.key});
 
@@ -38,10 +31,12 @@ class ScanPage extends StatefulWidget {
 
 class _ScanPageState extends State<ScanPage> {
   CameraController? _controller;
+  List<CameraDescription>? _cameras;
+  int _selectedCameraIdx = 0;
   bool _isInitialized = false;
 
   final ImagePicker _picker = ImagePicker();
-  final ApiService _apiService = ApiService(); // single instance
+  final ApiService _apiService = ApiService();
 
   @override
   void initState() {
@@ -50,18 +45,29 @@ class _ScanPageState extends State<ScanPage> {
   }
 
   Future<void> _initializeCamera() async {
-    final cameras = await availableCameras();
-    if (cameras.isEmpty) return;
+    _cameras = await availableCameras();
+    if (_cameras!.isEmpty) return;
 
-    _controller = CameraController(cameras.first, ResolutionPreset.high);
+    _controller = CameraController(
+      _cameras![_selectedCameraIdx],
+      ResolutionPreset.high,
+    );
     await _controller!.initialize();
     if (!mounted) return;
     setState(() => _isInitialized = true);
   }
 
+  void _flipCamera() async {
+    if (_cameras == null || _cameras!.length < 2) return;
+    setState(() => _isInitialized = false);
+    _selectedCameraIdx = (_selectedCameraIdx + 1) % _cameras!.length;
+    await _controller?.dispose();
+    await _initializeCamera();
+  }
+
   Future<void> _captureImage() async {
     if (!(_controller?.value.isInitialized ?? false)) return;
-    final shot = await _controller!.takePicture(); // XFile
+    final shot = await _controller!.takePicture();
     await _reviewAndUpload(shot);
   }
 
@@ -93,11 +99,9 @@ class _ScanPageState extends State<ScanPage> {
     );
 
     try {
-      // 1. Predict disease
       final prediction = await _apiService.predictDisease(xFile);
       final disease = prediction['predicted_class'] ?? 'Unknown';
 
-      // 2. Upload scan
       final scanData = await _apiService.uploadScan(
         image: xFile,
         disease: disease,
@@ -105,7 +109,7 @@ class _ScanPageState extends State<ScanPage> {
       );
 
       if (!mounted) return;
-      Navigator.pop(context); // close loader
+      Navigator.pop(context);
 
       Navigator.push(
         context,
@@ -147,7 +151,6 @@ class _ScanPageState extends State<ScanPage> {
     );
   }
 
-  /* ───────────── Bottom control bar ───────────── */
   Widget _buildBottomControls() => Positioned(
     bottom: 30,
     left: 0,
@@ -156,12 +159,21 @@ class _ScanPageState extends State<ScanPage> {
       alignment: Alignment.center,
       children: [
         Positioned(
-          left: 50,
+          left: 30,
           child: FloatingActionButton(
             heroTag: 'gallery',
             backgroundColor: Colors.white,
             onPressed: _pickFromGallery,
             child: const Icon(Icons.photo, color: Colors.black),
+          ),
+        ),
+        Positioned(
+          right: 30,
+          child: FloatingActionButton(
+            heroTag: 'flip',
+            backgroundColor: Colors.white,
+            onPressed: _flipCamera,
+            child: const Icon(Icons.cameraswitch, color: Colors.black),
           ),
         ),
         Container(
@@ -187,7 +199,6 @@ class _ScanPageState extends State<ScanPage> {
     ),
   );
 
-  /* ───────────── Bottom navigation bar ───────────── */
   Widget _buildBottomNav(BuildContext context) => BottomNavigationBar(
     currentIndex: 2,
     selectedItemColor: const Color(0xFF116736),
@@ -220,9 +231,6 @@ class _ScanPageState extends State<ScanPage> {
   );
 }
 
-/// ─────────────────────────────────────────────────────────────────────────
-///                       ImageReviewScreen
-/// ─────────────────────────────────────────────────────────────────────────
 class ImageReviewScreen extends StatelessWidget {
   final XFile xFile;
   const ImageReviewScreen({super.key, required this.xFile});
@@ -278,9 +286,6 @@ class ImageReviewScreen extends StatelessWidget {
   );
 }
 
-/// ─────────────────────────────────────────────────────────────────────────
-///                       ScanBorderPainter
-/// ─────────────────────────────────────────────────────────────────────────
 class ScanBorderPainter extends CustomPainter {
   @override
   void paint(Canvas c, Size s) {
