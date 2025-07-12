@@ -1,8 +1,10 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
-import 'package:image_picker/image_picker.dart'; // gives us XFile
+import 'package:mime/mime.dart';
+import 'package:image_picker/image_picker.dart'; // XFile
 
 class ApiService {
   // ─── Endpoints ──────────────────────────────────────────────────────────
@@ -122,33 +124,47 @@ class ApiService {
     final uri = Uri.parse('$modelUrl/predict');
     final req = http.MultipartRequest('POST', uri);
 
+    // Read bytes first
+    final bytes = await image.readAsBytes();
+
+    // Handle filename - provide a default if empty
+    final filename =
+        image.name.isNotEmpty
+            ? image.name
+            : 'capture_${DateTime.now().millisecondsSinceEpoch}.jpg';
+
+    // Determine MIME type more reliably
+    String mimeType;
     if (kIsWeb) {
-      final bytes = await image.readAsBytes();
-      req.files.add(
-        http.MultipartFile.fromBytes(
-          'file',
-          bytes,
-          filename: image.name,
-          contentType: MediaType('image', 'jpeg'),
-        ),
-      );
+      mimeType = image.mimeType ?? 'image/jpeg';
     } else {
-      req.files.add(
-        await http.MultipartFile.fromPath(
-          'file',
-          image.path,
-          contentType: MediaType('image', 'jpeg'),
-        ),
-      );
+      mimeType = lookupMimeType(image.path) ?? 'image/jpeg';
     }
 
-    final res = await http.Response.fromStream(await req.send());
+    final typeSplit = mimeType.split('/');
 
-    if (res.statusCode == 200) {
-      return jsonDecode(res.body) as Map<String, dynamic>;
-    } else {
-      final data = jsonDecode(res.body);
-      throw Exception(data['error'] ?? 'Prediction failed');
+    req.files.add(
+      http.MultipartFile.fromBytes(
+        'file',
+        bytes,
+        filename: filename,
+        contentType: MediaType(typeSplit[0], typeSplit[1]),
+      ),
+    );
+
+    try {
+      final res = await http.Response.fromStream(await req.send());
+      if (res.statusCode == 200) {
+        return jsonDecode(res.body) as Map<String, dynamic>;
+      } else {
+        final data = jsonDecode(res.body);
+        throw Exception(
+          data['error'] ?? 'Prediction failed with status ${res.statusCode}',
+        );
+      }
+    } catch (e) {
+      print('Prediction error: $e');
+      throw Exception('Failed to process image: $e');
     }
   }
 
@@ -160,37 +176,53 @@ class ApiService {
     required String token,
   }) async {
     final uri = Uri.parse('$baseUrl/api/scan');
-    final req =
+
+    final request =
         http.MultipartRequest('POST', uri)
           ..headers['Authorization'] = 'Bearer $token'
           ..fields['disease'] = disease;
 
-    if (kIsWeb) {
-      final bytes = await image.readAsBytes();
-      req.files.add(
-        http.MultipartFile.fromBytes(
-          'plantImage',
-          bytes,
-          filename: image.name,
-          contentType: MediaType('image', 'jpeg'),
-        ),
-      );
-    } else {
-      req.files.add(
-        await http.MultipartFile.fromPath(
-          'plantImage',
-          image.path,
-          contentType: MediaType('image', 'jpeg'),
-        ),
-      );
-    }
+    Uint8List imageBytes = await image.readAsBytes();
+    final mimeType = lookupMimeType(image.path) ?? 'image/jpeg';
+    final typeSplit = mimeType.split('/');
+    final filename =
+        image.name.isNotEmpty
+            ? image.name
+            : 'upload_${DateTime.now().millisecondsSinceEpoch}.jpg';
 
-    final res = await http.Response.fromStream(await req.send());
+    request.files.add(
+      http.MultipartFile.fromBytes(
+        'plantImage',
+        imageBytes,
+        filename: filename,
+        contentType: MediaType(typeSplit[0], typeSplit[1]),
+      ),
+    );
 
-    if (res.statusCode == 201) {
-      return jsonDecode(res.body) as Map<String, dynamic>;
-    } else {
-      throw Exception('Upload failed: ${res.body}');
+    try {
+      final streamedResponse = await request.send();
+      final response = await http.Response.fromStream(streamedResponse);
+      final responseData = json.decode(response.body);
+
+      // Accept any successful status code (200-299)
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        return responseData;
+      }
+      // Special case: If response contains success message but wrong status code
+      else if (responseData['message']?.toString().toLowerCase().contains(
+            'scan saved',
+          ) ==
+          true) {
+        return responseData;
+      }
+      throw Exception(
+        responseData['message'] ??
+            'Upload failed with status ${response.statusCode}',
+      );
+    } catch (e, stackTrace) {
+      print('❌ Upload exception: $e');
+      print('📌 Stack: $stackTrace');
+      throw Exception('Failed to upload scan: ${e.toString()}');
     }
   }
 

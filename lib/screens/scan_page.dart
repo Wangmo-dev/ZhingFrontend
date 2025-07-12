@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io' show File;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -79,18 +80,36 @@ class _ScanPageState extends State<ScanPage> {
 
   Future<void> _captureImage() async {
     try {
-      if (!(_controller?.value.isInitialized ?? false) ||
-          _controller!.value.isTakingPicture) {
-        return;
+      if (!(_controller?.value.isInitialized ?? false)) {
+        throw Exception('Camera not ready');
+      }
+
+      if (_controller!.value.isTakingPicture) {
+        return; // Prevent multiple captures
       }
 
       final shot = await _controller!.takePicture();
-      await _reviewAndUpload(shot);
+      if (!mounted) return;
+
+      // For web, we might need to convert the path
+      if (kIsWeb) {
+        final bytes = await shot.readAsBytes();
+        final webFile = XFile.fromData(
+          bytes,
+          name: 'capture_${DateTime.now().millisecondsSinceEpoch}.jpg',
+          mimeType: 'image/jpeg',
+        );
+        await _reviewAndUpload(webFile);
+      } else {
+        await _reviewAndUpload(shot);
+      }
     } catch (e) {
       print('Capture failed: $e');
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Failed to capture image: $e')));
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to capture image: $e')));
+      }
     }
   }
 
@@ -122,9 +141,11 @@ class _ScanPageState extends State<ScanPage> {
     );
 
     try {
+      // Step 1: Get disease prediction
       final prediction = await _apiService.predictDisease(xFile);
-      final disease = prediction['predicted_class'] ?? 'Unknown';
+      final disease = prediction['predicted_class']?.toString() ?? 'Unknown';
 
+      // Step 2: Upload scan with prediction
       final scanData = await _apiService.uploadScan(
         image: xFile,
         disease: disease,
@@ -132,8 +153,9 @@ class _ScanPageState extends State<ScanPage> {
       );
 
       if (!mounted) return;
-      Navigator.pop(context);
+      Navigator.pop(context); // Close loading dialog
 
+      // Step 3: Navigate to results page
       Navigator.push(
         context,
         MaterialPageRoute(
@@ -142,10 +164,42 @@ class _ScanPageState extends State<ScanPage> {
         ),
       );
     } catch (e) {
-      Navigator.pop(context);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Upload failed: $e')));
+      if (!mounted) return;
+      Navigator.pop(context); // Close loading dialog
+
+      // Special handling for success messages in error
+      final errorStr = e.toString();
+      if (errorStr.contains('Scan saved')) {
+        try {
+          // Extract JSON from error message
+          final jsonStart = errorStr.indexOf('{');
+          final jsonEnd = errorStr.lastIndexOf('}') + 1;
+          final jsonStr = errorStr.substring(jsonStart, jsonEnd);
+          final scanData = json.decode(jsonStr);
+
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder:
+                  (_) =>
+                      ScanResultPage(imagePath: xFile.path, scanData: scanData),
+            ),
+          );
+          return;
+        } catch (parseError) {
+          print('Failed to parse error message: $parseError');
+        }
+      }
+
+      // Show actual error message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Upload failed: ${e.toString().replaceAll('Exception: ', '')}',
+          ),
+          duration: const Duration(seconds: 4),
+        ),
+      );
     }
   }
 
