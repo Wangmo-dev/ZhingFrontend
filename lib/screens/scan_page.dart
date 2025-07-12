@@ -59,16 +59,39 @@ class _ScanPageState extends State<ScanPage> {
 
   void _flipCamera() async {
     if (_cameras == null || _cameras!.length < 2) return;
-    setState(() => _isInitialized = false);
+
+    setState(() => _isInitialized = false); // Reset UI
     _selectedCameraIdx = (_selectedCameraIdx + 1) % _cameras!.length;
+
     await _controller?.dispose();
-    await _initializeCamera();
+    _controller = CameraController(
+      _cameras![_selectedCameraIdx],
+      ResolutionPreset.high,
+    );
+    try {
+      await _controller!.initialize();
+      if (!mounted) return;
+      setState(() => _isInitialized = true);
+    } catch (e) {
+      print('Camera init error: $e');
+    }
   }
 
   Future<void> _captureImage() async {
-    if (!(_controller?.value.isInitialized ?? false)) return;
-    final shot = await _controller!.takePicture();
-    await _reviewAndUpload(shot);
+    try {
+      if (!(_controller?.value.isInitialized ?? false) ||
+          _controller!.value.isTakingPicture) {
+        return;
+      }
+
+      final shot = await _controller!.takePicture();
+      await _reviewAndUpload(shot);
+    } catch (e) {
+      print('Capture failed: $e');
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to capture image: $e')));
+    }
   }
 
   Future<void> _pickFromGallery() async {
