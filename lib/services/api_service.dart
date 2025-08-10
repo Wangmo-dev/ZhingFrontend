@@ -8,7 +8,7 @@ import 'package:image_picker/image_picker.dart'; // XFile
 
 class ApiService {
   // ─── Endpoints ──────────────────────────────────────────────────────────
-  final String baseUrl = 'https://zhingscanserver.onrender.com'; // Node
+  final String baseUrl = 'https://server-1-tnxh.onrender.com'; // Node
   final String modelUrl =
       'https://dechok-zhingscan-model.hf.space'; // ML / HuggingFace
 
